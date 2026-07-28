@@ -507,7 +507,7 @@ async function editSink(id){let s=db.sinks.find(x=>x.id===id);if(!s)return;let n
 async function deleteSink(id){if(!confirm('Delete this sink from the catalog?'))return;try{await window.CMGPricing.deleteSink(id);db.sinks=db.sinks.filter(x=>x.id!==id);renderAll()}catch(error){alert('Sink could not be deleted. '+error.message)}}
 function renderAll(){renderDashboard();renderJobs();renderCustomers();renderExpenses();renderInventory();renderPricing();renderSchedule();renderReports()}
 const fields={
- job:[['jobNo','Job Number','text'],['customer','Customer / Builder','customer'],['address','Job Address','text'],['material','Exact Material / Color','material'],['materialType','Stone Type','readonly'],['sqft','Square Feet','number'],['sinkId','Sink','sink'],['sinkQty','Number of Sinks','number'],['sinkCutouts','Sink Cutouts','number'],['cooktopCutouts','Cooktop Cutouts','number'],['tearoutSqft','Tear Out Sq Ft','number'],['status','Status','select',['Quote','Scheduled','In Progress','Installed','On Hold','Cancelled']],['templateDate','Template Date','date'],['installDate','Install Date','date'],['contractAmount','Quoted Price','readonly'],['paid','Payments Received','number'],['materialCost','Material Cost','readonly'],['sinkCost','Cutouts / Sinks Cost','readonly'],['fabricationCost','Fabrication Labor Cost','readonly'],['installationCost','Installation Labor Cost','readonly'],['otherCost','Other Direct Cost','number'],['notes','Notes','textarea']],
+ job:[['jobNo','Job Number','text'],['customer','Customer / Builder','customer'],['address','Job Address','text'],['material','Exact Material / Color','material'],['materialType','Stone Type','readonly'],['sqft','Square Feet','number'],['sinkId','Sink','sink'],['sinkQty','Number of Sinks','number'],['sinkCutouts','Sink Cutouts','number'],['cooktopCutouts','Cooktop Cutouts','number'],['tearoutSqft','Tear Out Sq Ft','number'],['status','Status','select',['Quote','Scheduled','In Progress','Installed','On Hold','Cancelled']],['templateDate','Template Date','date'],['installDate','Install Date','date'],['contractAmount','Quoted Price','number'],['paid','Payments Received','number'],['materialCost','Material Cost','readonly'],['sinkCost','Cutouts / Sinks Cost','readonly'],['fabricationCost','Fabrication Labor Cost','readonly'],['installationCost','Installation Labor Cost','readonly'],['otherCost','Other Direct Cost','number'],['notes','Notes','textarea']],
  customer:[['name','Customer / Builder','text'],['type','Type','select',['Homeowner','Builder','Contractor','Other']],['contact','Contact Name','text'],['phone','Phone','text'],['email','Email','email'],['address','Address','text'],['notes','Notes','textarea']],
  expense:[['date','Date','date'],['vendor','Vendor','text'],['category','Category','select',['Advertising','Bank Fees','Fuel','Insurance','Office Supplies','Professional Services','Repairs & Maintenance','Shop Rent','Software','Telephone & Internet','Tools','Utilities','Wages - Admin','Other']],['description','Description','text'],['amount','Amount','number'],['notes','Notes','textarea']],
  inventory:[['item','Material / Item','text'],['type','Inventory Type','select',['Slab','Remnant','Sink','Faucet','Consumable','Other']],['description','Color / Description','text'],['supplier','Supplier','text'],['qty','Quantity On Hand','number'],['unit','Unit','select',['slabs','pieces','boxes','each','sq ft']],['unitCost','Unit Cost','number'],['location','Location','text'],['reorderAt','Reorder When Qty Reaches','number'],['notes','Notes','textarea']]
@@ -522,9 +522,14 @@ function openModal(type,item=null){
    return `<div class="field ${t==='textarea'?'full':''}"><label>${l}</label>${t==='select'?`<select name="${n}"><option value=""></option>${opts.map(o=>`<option ${item?.[n]===o?'selected':''}>${o}</option>`).join('')}</select>`:t==='textarea'?`<textarea name="${n}">${esc(item?.[n]||'')}</textarea>`:`<input name="${n}" type="${t}" step="${t==='number'?'0.01':''}" value="${esc(item?.[n]||'')}">`}</div>`
  }).join('');
  if(type==='job'){
-   modalFields.insertAdjacentHTML('beforeend',`<div class="calc-box"><b>Automatic Job Estimate</b><div class="calc-grid" style="margin-top:10px"><div class="calc-item"><small>Material Cost</small><b id="autoMaterial">$0</b></div><div class="calc-item"><small>Labor &amp; Add On Cost</small><b id="autoLabor">$0</b></div><div class="calc-item"><small>Suggested Price</small><b id="autoSell">$0</b></div><div class="calc-item"><small>Estimated Profit</small><b id="autoProfit">$0</b></div></div><div class="field-note" style="margin-top:8px">Pricing is calculated automatically and locked into the job when saved.</div></div>`);
+   modalFields.insertAdjacentHTML('beforeend',`<div class="calc-box"><b>Automatic Job Estimate</b><div class="calc-grid" style="margin-top:10px"><div class="calc-item"><small>Material Cost</small><b id="autoMaterial">$0</b></div><div class="calc-item"><small>Labor &amp; Add On Cost</small><b id="autoLabor">$0</b></div><div class="calc-item"><small>Suggested Price</small><b id="autoSell">$0</b></div><div class="calc-item"><small>Estimated Profit</small><b id="autoProfit">$0</b></div></div><div class="field-note" style="margin-top:8px">Suggested pricing updates automatically. You can override the Quoted Price, and profit will recalculate from your final quote.</div></div>`);
    ['sqft','sinkQty','sinkCutouts','cooktopCutouts','tearoutSqft'].forEach(n=>modalFields.querySelector(`[name="${n}"]`)?.addEventListener('input',recalcJobForm));
-   setTimeout(()=>recalcJobForm(!item),0);
+   const quoteInput=modalFields.querySelector('[name="contractAmount"]');
+   if(quoteInput){
+     if(item)quoteInput.dataset.manual='true';
+     quoteInput.addEventListener('input',()=>{quoteInput.dataset.manual='true';recalcJobForm(false)});
+   }
+   setTimeout(()=>recalcJobForm(true),0);
  }
  modalWrap.classList.add('open')
 }
@@ -546,9 +551,11 @@ function recalcJobForm(writeValues=true){
    if(f.querySelector('[name="fabricationCost"]'))f.querySelector('[name="fabricationCost"]').value=fabrication.toFixed(2);
    if(f.querySelector('[name="installationCost"]'))f.querySelector('[name="installationCost"]').value=installation.toFixed(2);
    if(f.querySelector('[name="sinkCost"]'))f.querySelector('[name="sinkCost"]').value=addOnCost.toFixed(2);
-   if(f.querySelector('[name="contractAmount"]'))f.querySelector('[name="contractAmount"]').value=sell.toFixed(2);
  }
- if(window.autoMaterial){autoMaterial.textContent=money(material);autoLabor.textContent=money(fabrication+installation+addOnCost);autoSell.textContent=money(sell);autoProfit.textContent=money(sell-material-fabrication-installation-addOnCost)}
+ const quoteInput=f.querySelector('[name="contractAmount"]');
+ if(quoteInput&&quoteInput.dataset.manual!=='true')quoteInput.value=sell.toFixed(2);
+ const quoted=+(quoteInput?.value||sell||0);
+ if(window.autoMaterial){autoMaterial.textContent=money(material);autoLabor.textContent=money(fabrication+installation+addOnCost);autoSell.textContent=money(sell);autoProfit.textContent=money(quoted-material-fabrication-installation-addOnCost)}
 }
 function closeModal(){modalWrap.classList.remove('open')}
 function editItem(type,id){let key={job:'jobs',customer:'customers',expense:'expenses',inventory:'inventory'}[type];openModal(type,db[key].find(x=>x.id===id))}
