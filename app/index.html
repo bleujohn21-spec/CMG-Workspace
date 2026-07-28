@@ -120,7 +120,10 @@ table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:11px 9px;
     <section class="view" id="pricing">
       <div class="topbar"><div><h1>Materials &amp; Pricing</h1><div class="subtitle">Stone, sinks, labor, and additional charges used for new jobs</div></div></div>
       <div class="card" style="margin-bottom:16px"><div class="section-title"><h2>Labor &amp; Charges</h2><button class="primary" onclick="saveRates()">Save Rates</button></div><div class="field-note" style="margin-bottom:14px">Cost is your direct cost. Customer charge is added to the automatic quoted price.</div><div class="form-grid">
+        <div class="field"><label>Fabrication Labor Cost per Sq Ft</label><input id="rateFabrication" type="number" step="0.01"></div>
         <div class="field"><label>Installation Labor Cost per Sq Ft</label><input id="rateInstall" type="number" step="0.01"></div>
+        <div class="field"><label>Sink Cost Each</label><input id="rateSinkCost" type="number" step="0.01"></div>
+        <div class="field"><label>Sink Customer Charge Each</label><input id="rateSinkCharge" type="number" step="0.01"></div>
         <div class="field"><label>Sink Cutout Cost Each</label><input id="rateSinkCutoutCost" type="number" step="0.01"></div>
         <div class="field"><label>Sink Cutout Customer Charge</label><input id="rateSinkCutoutCharge" type="number" step="0.01"></div>
         <div class="field"><label>Cooktop Cutout Cost Each</label><input id="rateCooktopCutoutCost" type="number" step="0.01"></div>
@@ -163,19 +166,210 @@ table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:11px 9px;
 
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="js/config.js"></script>
-<script src="js/auth.js"></script>
-<script src="js/supabase.js"></script>
-<script src="js/pricing.js"></script>
-<script src="js/jobs.js"></script>
-<script src="js/photos.js"></script>
+<script>
+/* config.js */
+window.CMG_CONFIG={
+  SUPABASE_URL:"https://jaiedpqptinpldckbzub.supabase.co",
+  SUPABASE_KEY:"sb_publishable_wHfxguoIJzg-N67yypEo8A_EuX6KM0q"
+};
+
+</script>
+<script>
+/* auth.js */
+(function(){
+  const config=window.CMG_CONFIG||{};
+  let client;
+  function getClient(){
+    if(client)return client;
+    if(!window.supabase?.createClient)throw new Error('Supabase library did not load.');
+    client=window.supabase.createClient(config.SUPABASE_URL,config.SUPABASE_KEY);
+    return client;
+  }
+  const screen=()=>document.getElementById('authScreen');
+  const errorBox=()=>document.getElementById('authError');
+  const loading=()=>document.getElementById('authLoading');
+  const submit=()=>document.getElementById('authSubmit');
+  function showError(message){const el=errorBox();el.textContent=message||'Unable to sign in.';el.classList.add('show');}
+  function clearError(){const el=errorBox();el.textContent='';el.classList.remove('show');}
+  function showLogin(){screen().classList.remove('hidden');loading().style.display='none';submit().disabled=false;}
+  function hideLogin(){screen().classList.add('hidden');}
+  async function requireSession(){const {data,error}=await getClient().auth.getSession();if(error)throw error;if(!data.session)throw new Error('Not signed in.');return data.session;}
+  async function signIn(email,password){
+    clearError();submit().disabled=true;loading().style.display='block';loading().textContent='Signing in…';
+    const {data,error}=await getClient().auth.signInWithPassword({email,password});
+    if(error){submit().disabled=false;loading().style.display='none';showError(error.message);return null;}
+    hideLogin();window.dispatchEvent(new CustomEvent('cmg-authenticated',{detail:data.session}));return data.session;
+  }
+  async function signOut(){await getClient().auth.signOut();location.reload();}
+  async function initialize(){
+    document.getElementById('authForm').addEventListener('submit',e=>{e.preventDefault();signIn(document.getElementById('authEmail').value.trim(),document.getElementById('authPassword').value);});
+    const {data,error}=await getClient().auth.getSession();
+    if(error){loading().style.display='none';showError(error.message);return;}
+    if(data.session){hideLogin();window.dispatchEvent(new CustomEvent('cmg-authenticated',{detail:data.session}));}else{showLogin();}
+    getClient().auth.onAuthStateChange((event,session)=>{if(event==='SIGNED_OUT'||!session)showLogin();});
+  }
+  window.CMGAuth={initialize,signIn,signOut,requireSession,getClient};
+})();
+
+</script>
+<script>
+/* supabase.js */
+(function(){
+  const config=window.CMG_CONFIG||{};
+  const placeholder='PASTE_YOUR_PUBLISHABLE_KEY_HERE';
+
+  function requireClient(){
+    if(!window.supabase?.createClient)throw new Error('Supabase library did not load.');
+    if(!config.SUPABASE_URL||!config.SUPABASE_KEY||config.SUPABASE_KEY===placeholder){
+      throw new Error('Add your Supabase publishable key in js/config.js.');
+    }
+    return window.supabase.createClient(config.SUPABASE_URL,config.SUPABASE_KEY);
+  }
+
+  let client;
+  function getClient(){
+    client=client||requireClient();
+    return client;
+  }
+
+  const fromRow=row=>({
+    id:row.id,
+    name:row.name||'',
+    type:row.type||'',
+    contact:row.contact||'',
+    phone:row.phone||'',
+    email:row.email||'',
+    address:row.address||'',
+    notes:row.notes||''
+  });
+
+  const toRow=customer=>({
+    name:String(customer.name||'').trim(),
+    type:customer.type||null,
+    contact:customer.contact||null,
+    phone:customer.phone||null,
+    email:customer.email||null,
+    address:customer.address||null,
+    notes:customer.notes||null
+  });
+
+  async function list(){
+    const {data,error}=await getClient().from('customers').select('*').order('created_at',{ascending:false});
+    if(error)throw error;
+    return (data||[]).map(fromRow);
+  }
+
+  async function save(customer,id){
+    const row=toRow(customer);
+    if(!row.name)throw new Error('Customer / Builder is required.');
+    const query=id
+      ?getClient().from('customers').update(row).eq('id',id).select().single()
+      :getClient().from('customers').insert(row).select().single();
+    const {data,error}=await query;
+    if(error)throw error;
+    return fromRow(data);
+  }
+
+  async function remove(id){
+    const {error}=await getClient().from('customers').delete().eq('id',id);
+    if(error)throw error;
+  }
+
+  async function importMany(customers){
+    if(!Array.isArray(customers)||!customers.length)return;
+    for(const customer of customers){
+      const row=toRow(customer);
+      if(!row.name)continue;
+      if(customer.id&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(customer.id)){
+        const {error}=await getClient().from('customers').upsert({id:customer.id,...row});
+        if(error)throw error;
+      }else{
+        const {data,error}=await getClient().from('customers').select('id').ilike('name',row.name).limit(1);
+        if(error)throw error;
+        if(!data?.length){const result=await getClient().from('customers').insert(row);if(result.error)throw result.error;}
+      }
+    }
+  }
+
+  async function initialize(legacyCustomers){
+    let customers=await list();
+    if(!customers.length&&Array.isArray(legacyCustomers)&&legacyCustomers.length){
+      await importMany(legacyCustomers);
+      customers=await list();
+    }
+    return customers;
+  }
+
+  window.CMGCustomers={list,save,remove,importMany,initialize};
+})();
+
+</script>
+<script>
+/* pricing.js */
+(function(){
+  const config=window.CMG_CONFIG||{};
+  let client;
+  function getClient(){
+    if(client)return client;
+    if(!window.supabase?.createClient)throw new Error('Supabase library did not load.');
+    client=window.supabase.createClient(config.SUPABASE_URL,config.SUPABASE_KEY);
+    return client;
+  }
+  const n=v=>Number(v||0);
+  const materialFrom=r=>({id:r.id,name:r.name||'',type:r.type||'',supplier:r.supplier||'',cost:n(r.cost_per_sqft),sell:n(r.sell_per_sqft),active:r.active!==false});
+  const sinkFrom=r=>({id:r.id,name:r.name||'',supplier:r.supplier||'',cost:n(r.cost),sell:n(r.sell_price),active:r.active!==false});
+  async function listMaterials(){const {data,error}=await getClient().from('cmg_materials').select('*').order('type').order('name');if(error)throw error;return (data||[]).map(materialFrom)}
+  async function saveMaterial(m,id){const row={name:String(m.name||'').trim(),type:String(m.type||'').trim(),supplier:m.supplier||null,cost_per_sqft:n(m.cost),sell_per_sqft:n(m.sell),active:m.active!==false};if(!row.name||!row.type)throw new Error('Material name and stone type are required.');let q=id?getClient().from('cmg_materials').update(row).eq('id',id):getClient().from('cmg_materials').insert(row);const {data,error}=await q.select().single();if(error)throw error;return materialFrom(data)}
+  async function deleteMaterial(id){const {error}=await getClient().from('cmg_materials').delete().eq('id',id);if(error)throw error}
+  async function listSinks(){const {data,error}=await getClient().from('cmg_sinks').select('*').order('name');if(error)throw error;return (data||[]).map(sinkFrom)}
+  async function saveSink(s,id){const row={name:String(s.name||'').trim(),supplier:s.supplier||null,cost:n(s.cost),sell_price:n(s.sell),active:s.active!==false};if(!row.name)throw new Error('Sink name is required.');let q=id?getClient().from('cmg_sinks').update(row).eq('id',id):getClient().from('cmg_sinks').insert(row);const {data,error}=await q.select().single();if(error)throw error;return sinkFrom(data)}
+  async function deleteSink(id){const {error}=await getClient().from('cmg_sinks').delete().eq('id',id);if(error)throw error}
+  async function getRates(){const {data,error}=await getClient().from('cmg_rates').select('*').eq('id',1).maybeSingle();if(error)throw error;return data?{fabrication:n(data.fabrication_cost_per_sqft),install:n(data.install_cost_per_sqft),sinkCost:n(data.sink_cost),sinkCharge:n(data.sink_charge),sinkCutoutCost:n(data.sink_cutout_cost),sinkCutoutCharge:n(data.sink_cutout_charge),cooktopCutoutCost:n(data.cooktop_cutout_cost),cooktopCutoutCharge:n(data.cooktop_cutout_charge),tearoutCost:n(data.tearout_cost_per_sqft),tearoutCharge:n(data.tearout_charge_per_sqft)}:{fabrication:0,install:0,sinkCost:0,sinkCharge:0,sinkCutoutCost:0,sinkCutoutCharge:0,cooktopCutoutCost:0,cooktopCutoutCharge:0,tearoutCost:0,tearoutCharge:0}}
+  async function saveRates(r){const row={id:1,fabrication_cost_per_sqft:n(r.fabrication),install_cost_per_sqft:n(r.install),sink_cost:n(r.sinkCost),sink_charge:n(r.sinkCharge),sink_cutout_cost:n(r.sinkCutoutCost),sink_cutout_charge:n(r.sinkCutoutCharge),cooktop_cutout_cost:n(r.cooktopCutoutCost),cooktop_cutout_charge:n(r.cooktopCutoutCharge),tearout_cost_per_sqft:n(r.tearoutCost),tearout_charge_per_sqft:n(r.tearoutCharge),updated_at:new Date().toISOString()};const {error}=await getClient().from('cmg_rates').upsert(row);if(error)throw error}
+  async function initialize(localMaterials,localRates,localSinks){let [materials,sinks,rates]=await Promise.all([listMaterials(),listSinks(),getRates()]);if(!materials.length&&Array.isArray(localMaterials)&&localMaterials.length){for(const m of localMaterials)await saveMaterial(m);materials=await listMaterials()}if(!sinks.length&&Array.isArray(localSinks)&&localSinks.length){for(const s of localSinks)await saveSink(s);sinks=await listSinks()}if(!Object.values(rates).some(Boolean)&&localRates){rates={fabrication:n(localRates.fabrication),install:n(localRates.install),sinkCost:n(localRates.sinkCost),sinkCharge:n(localRates.sinkCharge),sinkCutoutCost:n(localRates.sinkCutoutCost),sinkCutoutCharge:n(localRates.sinkCutoutCharge),cooktopCutoutCost:n(localRates.cooktopCutoutCost),cooktopCutoutCharge:n(localRates.cooktopCutoutCharge),tearoutCost:n(localRates.tearoutCost),tearoutCharge:n(localRates.tearoutCharge)};await saveRates(rates)}return {materials,sinks,rates}}
+  window.CMGPricing={initialize,listMaterials,saveMaterial,deleteMaterial,listSinks,saveSink,deleteSink,getRates,saveRates};
+})();
+
+</script>
+<script>
+/* jobs.js */
+(function(){
+  const config=window.CMG_CONFIG||{};
+  let client;
+  function getClient(){if(client)return client;if(!window.supabase?.createClient)throw new Error('Supabase library did not load.');client=window.supabase.createClient(config.SUPABASE_URL,config.SUPABASE_KEY);return client}
+  const fromRow=r=>({id:r.id,...(r.data||{})});
+  async function list(){const {data,error}=await getClient().from('cmg_jobs').select('*').order('created_at',{ascending:false});if(error)throw error;return (data||[]).map(fromRow)}
+  async function save(job,id){const data={...job};delete data.id;const row={data,updated_at:new Date().toISOString()};let q=id?getClient().from('cmg_jobs').update(row).eq('id',id):getClient().from('cmg_jobs').insert(row);const {data:result,error}=await q.select().single();if(error)throw error;return fromRow(result)}
+  async function remove(id){const {error}=await getClient().from('cmg_jobs').delete().eq('id',id);if(error)throw error}
+  async function importMany(jobs){if(!Array.isArray(jobs))return;for(const job of jobs){const existing=job.id&&/^[0-9a-f-]{36}$/i.test(job.id);if(existing){const data={...job};delete data.id;const {error}=await getClient().from('cmg_jobs').upsert({id:job.id,data});if(error)throw error}else await save(job)}}
+  async function initialize(localJobs){let jobs=await list();if(!jobs.length&&Array.isArray(localJobs)&&localJobs.length){await importMany(localJobs);jobs=await list()}return jobs}
+  window.CMGJobs={initialize,list,save,remove,importMany};
+})();
+
+</script>
+<script>
+/* photos.js */
+(function(){
+  const config=window.CMG_CONFIG||{};
+  const BUCKET='cmg-job-photos';
+  let client;
+  function getClient(){if(client)return client;if(!window.supabase?.createClient)throw new Error('Supabase library did not load.');client=window.supabase.createClient(config.SUPABASE_URL,config.SUPABASE_KEY);return client}
+  function safeName(name){const ext=(name.split('.').pop()||'jpg').toLowerCase().replace(/[^a-z0-9]/g,'')||'jpg';const base=name.replace(/\.[^.]+$/,'').replace(/[^a-z0-9_-]+/gi,'_').slice(0,60)||'photo';return `${Date.now()}_${Math.random().toString(36).slice(2,8)}_${base}.${ext}`}
+  async function upload(jobId,file){if(!jobId)throw new Error('Save the job before adding photos.');if(!file?.type?.startsWith('image/'))throw new Error('Only image files can be uploaded.');if(file.size>20*1024*1024)throw new Error('Each photo must be 20 MB or smaller.');const name=safeName(file.name),path=`${jobId}/${name}`;const {error}=await getClient().storage.from(BUCKET).upload(path,file,{cacheControl:'3600',upsert:false,contentType:file.type});if(error)throw error;return {name,path}}
+  async function list(jobId){const {data,error}=await getClient().storage.from(BUCKET).list(jobId,{limit:100,sortBy:{column:'created_at',order:'desc'}});if(error)throw error;const files=(data||[]).filter(x=>x.name&&!x.name.startsWith('.'));return Promise.all(files.map(async x=>{const path=`${jobId}/${x.name}`;const {data:signed,error:signedError}=await getClient().storage.from(BUCKET).createSignedUrl(path,3600);if(signedError)throw signedError;return {name:x.name,path,url:signed.signedUrl,createdAt:x.created_at}}))}
+  async function remove(jobId,name){const {error}=await getClient().storage.from(BUCKET).remove([`${jobId}/${name}`]);if(error)throw error}
+  async function removeAll(jobId){const files=await list(jobId);if(!files.length)return;const {error}=await getClient().storage.from(BUCKET).remove(files.map(x=>x.path));if(error)throw error}
+  window.CMGPhotos={upload,list,remove,removeAll,BUCKET};
+})();
+
+</script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
 
 <script>
 const DB_KEY='capital_marble_workspace_v1';
 const DEFAULT_MATERIALS=[];
 const DEFAULT_SINKS=[];
-const DEFAULT_RATES={install:0,sinkCutoutCost:0,sinkCutoutCharge:0,cooktopCutoutCost:0,cooktopCutoutCharge:0,tearoutCost:0,tearoutCharge:0};
+const DEFAULT_RATES={fabrication:0,install:0,sinkCost:0,sinkCharge:0,sinkCutoutCost:0,sinkCutoutCharge:0,cooktopCutoutCost:0,cooktopCutoutCharge:0,tearoutCost:0,tearoutCharge:0};
 let stored;
 try{stored=JSON.parse(localStorage.getItem(DB_KEY)||'null')}catch(e){stored=null}
 const legacyCustomers=Array.isArray(stored?.customers)?stored.customers:[];
@@ -216,7 +410,7 @@ function statusControl(j){let current=normalizeStatus(j.status);return `<div cla
 function applyInstalledPaymentRule(j,previousStatus){if(normalizeStatus(j.status)!=='Installed'||normalizeStatus(previousStatus)==='Installed')return;let state=paymentState(j);if(state==='no-deposit')j.paymentStatus='not-paid'}
 function advanceJobStatus(id){let j=db.jobs.find(x=>x.id===id);if(!j)return;let previous=normalizeStatus(j.status),i=STATUS_FLOW.indexOf(previous);if(i<0)return;j.status=STATUS_FLOW[Math.min(i+1,STATUS_FLOW.length-1)];applyInstalledPaymentRule(j,previous);save()}
 function updateJobStatus(id,status){if(!status)return;let j=db.jobs.find(x=>x.id===id);if(!j)return;let previous=normalizeStatus(j.status);j.status=normalizeStatus(status);applyInstalledPaymentRule(j,previous);save()}
-function calcJob(j){let revenue=+j.contractAmount||0, cogs=(+j.materialCost||0)+(+j.sinkCost||0)+(+j.laborCost||0)+(+j.otherCost||0), profit=revenue-cogs, balance=revenue-(+j.paid||0);return {revenue,cogs,profit,balance,margin:revenue?profit/revenue:0}}
+function calcJob(j){let revenue=+j.contractAmount||0, separatedLabor=(+j.fabricationCost||0)+(+j.installationCost||0), labor=separatedLabor||(+j.laborCost||0), cogs=(+j.materialCost||0)+(+j.sinkCost||0)+labor+(+j.otherCost||0), profit=revenue-cogs, balance=revenue-(+j.paid||0);return {revenue,cogs,profit,balance,margin:revenue?profit/revenue:0}}
 const PAYMENT_STATES=['no-deposit','deposit','not-paid','paid'];
 function paymentState(j){let total=+j.contractAmount||0,paid=+j.paid||0;if(j.paymentStatus&&PAYMENT_STATES.includes(j.paymentStatus)){if(total>0&&paid>=total-.01)return 'paid';return j.paymentStatus}if(total>0&&paid>=total-.01)return 'paid';if(total>0&&Math.abs(paid-total/2)<.01)return 'deposit';if(paid<=0&&normalizeStatus(j.status)==='Installed')return 'not-paid';if(paid<=0)return 'no-deposit';return 'not-paid'}
 function paymentLabel(state){return {'no-deposit':'No Deposit','deposit':'50% Deposit','not-paid':'Not Paid','paid':'Paid'}[state]||'No Deposit'}
@@ -269,7 +463,7 @@ function renderJobDetail(j){
  <div class="card detail-card"><h2>Notes</h2><div class="quote-note">${detailValue(j.notes,'No notes added.')}</div></div>
  </div><div class="detail-stack">
  <div class="card detail-card"><h2>Quote</h2><table class="price-table"><tbody>${items.map(x=>`<tr><td>${esc(x[0])}</td><td>${money(x[1])}</td></tr>`).join('')}<tr class="total"><td>Quoted Price</td><td>${money(c.revenue)}</td></tr><tr><td>Payments Received</td><td>${money(+j.paid||0)}</td></tr><tr><td>Balance Due</td><td>${money(Math.max(0,c.balance))}</td></tr></tbody></table></div>
- <div class="card detail-card"><h2>Internal Cost & Profit</h2><table class="price-table"><tbody><tr><td>Material Cost</td><td>${money(+j.materialCost||0)}</td></tr><tr><td>Cutouts / Sinks Cost</td><td>${money(+j.sinkCost||0)}</td></tr><tr><td>Labor Cost</td><td>${money(+j.laborCost||0)}</td></tr><tr><td>Other Direct Cost</td><td>${money(+j.otherCost||0)}</td></tr><tr class="total"><td>Gross Profit</td><td>${money(c.profit)}</td></tr><tr><td>Gross Margin</td><td>${(c.margin*100).toFixed(1)}%</td></tr></tbody></table></div>
+ <div class="card detail-card"><h2>Internal Cost & Profit</h2><table class="price-table"><tbody><tr><td>Material Cost</td><td>${money(+j.materialCost||0)}</td></tr><tr><td>Cutouts / Sinks Cost</td><td>${money(+j.sinkCost||0)}</td></tr><tr><td>Fabrication Labor</td><td>${money(+j.fabricationCost||0)}</td></tr><tr><td>Installation Labor</td><td>${money(+j.installationCost||(+j.laborCost||0))}</td></tr><tr><td>Other Direct Cost</td><td>${money(+j.otherCost||0)}</td></tr><tr class="total"><td>Gross Profit</td><td>${money(c.profit)}</td></tr><tr><td>Gross Margin</td><td>${(c.margin*100).toFixed(1)}%</td></tr></tbody></table></div>
  </div></div>`;
  setupPhotoUpload(j.id);
 }
@@ -299,10 +493,10 @@ function groupBars(obj){let arr=Object.entries(obj).sort((a,b)=>b[1]-a[1]),max=M
 function renderPricing(){
  materialsTable.innerHTML=db.materials.length?`<table><thead><tr><th>Exact Material / Color</th><th>Type</th><th>Supplier</th><th>Cost / Sq Ft</th><th>Sell / Sq Ft</th><th></th></tr></thead><tbody>${db.materials.map(m=>`<tr><td><b>${esc(m.name)}</b></td><td>${esc(m.type)}</td><td>${esc(m.supplier||'')}</td><td>${money(m.cost)}</td><td>${money(m.sell)}</td><td><button class="link-btn" onclick="editMaterial('${m.id}')">Edit</button><button class="link-btn" onclick="deleteMaterial('${m.id}')">Delete</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No stone pricing has been added yet.</div>';
  sinksTable.innerHTML=db.sinks.length?`<table><thead><tr><th>Sink</th><th>Supplier</th><th>Cost</th><th>Selling Price</th><th></th></tr></thead><tbody>${db.sinks.map(s=>`<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.supplier||'')}</td><td>${money(s.cost)}</td><td>${money(s.sell)}</td><td><button class="link-btn" onclick="editSink('${s.id}')">Edit</button><button class="link-btn" onclick="deleteSink('${s.id}')">Delete</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No sinks have been added yet.</div>';
- ['install','sinkCutoutCost','sinkCutoutCharge','cooktopCutoutCost','cooktopCutoutCharge','tearoutCost','tearoutCharge'].forEach(k=>{let e=document.getElementById('rate'+k[0].toUpperCase()+k.slice(1));if(e)e.value=db.rates[k]??0})
+ ['fabrication','install','sinkCost','sinkCharge','sinkCutoutCost','sinkCutoutCharge','cooktopCutoutCost','cooktopCutoutCharge','tearoutCost','tearoutCharge'].forEach(k=>{let e=document.getElementById('rate'+k[0].toUpperCase()+k.slice(1));if(e)e.value=db.rates[k]??0})
 }
 async function saveRates(){
- const next={};['install','sinkCutoutCost','sinkCutoutCharge','cooktopCutoutCost','cooktopCutoutCharge','tearoutCost','tearoutCharge'].forEach(k=>{let e=document.getElementById('rate'+k[0].toUpperCase()+k.slice(1));next[k]=+(e?.value||0)});
+ const next={};['fabrication','install','sinkCost','sinkCharge','sinkCutoutCost','sinkCutoutCharge','cooktopCutoutCost','cooktopCutoutCharge','tearoutCost','tearoutCharge'].forEach(k=>{let e=document.getElementById('rate'+k[0].toUpperCase()+k.slice(1));next[k]=+(e?.value||0)});
  try{await window.CMGPricing.saveRates(next);db.rates=next;renderPricing();alert('Rates saved.')}catch(error){alert('Rates could not be saved. '+error.message)}
 }
 async function addMaterial(){let name=prompt('Exact material or color name:');if(!name)return;let type=prompt('Stone type:', 'Granite')||'Other',cost=+prompt('Your cost per square foot:', '0')||0,sell=+prompt('Selling price per square foot:', '0')||0,supplier=prompt('Supplier:', '')||'';try{let m=await window.CMGPricing.saveMaterial({name,type,cost,sell,supplier});db.materials.push(m);db.materials.sort((a,b)=>a.type.localeCompare(b.type)||a.name.localeCompare(b.name));renderAll()}catch(error){alert('Stone could not be saved. '+error.message)}}
@@ -313,7 +507,7 @@ async function editSink(id){let s=db.sinks.find(x=>x.id===id);if(!s)return;let n
 async function deleteSink(id){if(!confirm('Delete this sink from the catalog?'))return;try{await window.CMGPricing.deleteSink(id);db.sinks=db.sinks.filter(x=>x.id!==id);renderAll()}catch(error){alert('Sink could not be deleted. '+error.message)}}
 function renderAll(){renderDashboard();renderJobs();renderCustomers();renderExpenses();renderInventory();renderPricing();renderSchedule();renderReports()}
 const fields={
- job:[['jobNo','Job Number','text'],['customer','Customer / Builder','customer'],['address','Job Address','text'],['material','Exact Material / Color','material'],['materialType','Stone Type','readonly'],['sqft','Square Feet','number'],['sinkId','Sink','sink'],['sinkQty','Number of Sinks','number'],['sinkCutouts','Sink Cutouts','number'],['cooktopCutouts','Cooktop Cutouts','number'],['tearoutSqft','Tear Out Sq Ft','number'],['status','Status','select',['Quote','Scheduled','In Progress','Installed','On Hold','Cancelled']],['templateDate','Template Date','date'],['installDate','Install Date','date'],['contractAmount','Quoted Price','readonly'],['paid','Payments Received','number'],['materialCost','Material Cost','readonly'],['sinkCost','Cutouts / Sinks Cost','readonly'],['laborCost','Labor Cost','readonly'],['otherCost','Other Direct Cost','number'],['notes','Notes','textarea']],
+ job:[['jobNo','Job Number','text'],['customer','Customer / Builder','customer'],['address','Job Address','text'],['material','Exact Material / Color','material'],['materialType','Stone Type','readonly'],['sqft','Square Feet','number'],['sinkId','Sink','sink'],['sinkQty','Number of Sinks','number'],['sinkCutouts','Sink Cutouts','number'],['cooktopCutouts','Cooktop Cutouts','number'],['tearoutSqft','Tear Out Sq Ft','number'],['status','Status','select',['Quote','Scheduled','In Progress','Installed','On Hold','Cancelled']],['templateDate','Template Date','date'],['installDate','Install Date','date'],['contractAmount','Quoted Price','readonly'],['paid','Payments Received','number'],['materialCost','Material Cost','readonly'],['sinkCost','Cutouts / Sinks Cost','readonly'],['fabricationCost','Fabrication Labor Cost','readonly'],['installationCost','Installation Labor Cost','readonly'],['otherCost','Other Direct Cost','number'],['notes','Notes','textarea']],
  customer:[['name','Customer / Builder','text'],['type','Type','select',['Homeowner','Builder','Contractor','Other']],['contact','Contact Name','text'],['phone','Phone','text'],['email','Email','email'],['address','Address','text'],['notes','Notes','textarea']],
  expense:[['date','Date','date'],['vendor','Vendor','text'],['category','Category','select',['Advertising','Bank Fees','Fuel','Insurance','Office Supplies','Professional Services','Repairs & Maintenance','Shop Rent','Software','Telephone & Internet','Tools','Utilities','Wages - Admin','Other']],['description','Description','text'],['amount','Amount','number'],['notes','Notes','textarea']],
  inventory:[['item','Material / Item','text'],['type','Inventory Type','select',['Slab','Remnant','Sink','Faucet','Consumable','Other']],['description','Color / Description','text'],['supplier','Supplier','text'],['qty','Quantity On Hand','number'],['unit','Unit','select',['slabs','pieces','boxes','each','sq ft']],['unitCost','Unit Cost','number'],['location','Location','text'],['reorderAt','Reorder When Qty Reaches','number'],['notes','Notes','textarea']]
@@ -340,18 +534,21 @@ function recalcJobForm(writeValues=true){
  if(editing.type!=='job')return;
  let f=modalFields,mat=db.materials.find(m=>m.name===f.querySelector('[name="material"]')?.value),sink=db.sinks.find(s=>s.id===f.querySelector('[name="sinkId"]')?.value),sq=+(f.querySelector('[name="sqft"]')?.value||0),sinkQty=+(f.querySelector('[name="sinkQty"]')?.value||0),sinkCutouts=+(f.querySelector('[name="sinkCutouts"]')?.value||0),cooktopCutouts=+(f.querySelector('[name="cooktopCutouts"]')?.value||0),tear=+(f.querySelector('[name="tearoutSqft"]')?.value||0);
  let material=mat?sq*mat.cost:0;
- let labor=sq*(+db.rates.install)+tear*(+db.rates.tearoutCost);
- let addOnCost=sinkQty*(sink?.cost||0)+sinkCutouts*(+db.rates.sinkCutoutCost)+cooktopCutouts*(+db.rates.cooktopCutoutCost);
- let addOnCharges=sinkQty*(sink?.sell||0)+sinkCutouts*(+db.rates.sinkCutoutCharge)+cooktopCutouts*(+db.rates.cooktopCutoutCharge)+tear*(+db.rates.tearoutCharge);
+ let fabrication=sq*(+db.rates.fabrication||0);
+ let installation=sq*(+db.rates.install||0)+tear*(+db.rates.tearoutCost||0);
+ let sinkUnitCost=sink?+(sink.cost||0):+(db.rates.sinkCost||0),sinkUnitCharge=sink?+(sink.sell||0):+(db.rates.sinkCharge||0);
+ let addOnCost=sinkQty*sinkUnitCost+sinkCutouts*(+db.rates.sinkCutoutCost)+cooktopCutouts*(+db.rates.cooktopCutoutCost);
+ let addOnCharges=sinkQty*sinkUnitCharge+sinkCutouts*(+db.rates.sinkCutoutCharge)+cooktopCutouts*(+db.rates.cooktopCutoutCharge)+tear*(+db.rates.tearoutCharge);
  let sell=(mat?sq*mat.sell:0)+addOnCharges;
  if(f.querySelector('[name="materialType"]'))f.querySelector('[name="materialType"]').value=mat?.type||'';
  if(writeValues){
    if(f.querySelector('[name="materialCost"]'))f.querySelector('[name="materialCost"]').value=material.toFixed(2);
-   if(f.querySelector('[name="laborCost"]'))f.querySelector('[name="laborCost"]').value=labor.toFixed(2);
+   if(f.querySelector('[name="fabricationCost"]'))f.querySelector('[name="fabricationCost"]').value=fabrication.toFixed(2);
+   if(f.querySelector('[name="installationCost"]'))f.querySelector('[name="installationCost"]').value=installation.toFixed(2);
    if(f.querySelector('[name="sinkCost"]'))f.querySelector('[name="sinkCost"]').value=addOnCost.toFixed(2);
    if(f.querySelector('[name="contractAmount"]'))f.querySelector('[name="contractAmount"]').value=sell.toFixed(2);
  }
- if(window.autoMaterial){autoMaterial.textContent=money(material);autoLabor.textContent=money(labor+addOnCost);autoSell.textContent=money(sell);autoProfit.textContent=money(sell-material-labor-addOnCost)}
+ if(window.autoMaterial){autoMaterial.textContent=money(material);autoLabor.textContent=money(fabrication+installation+addOnCost);autoSell.textContent=money(sell);autoProfit.textContent=money(sell-material-fabrication-installation-addOnCost)}
 }
 function closeModal(){modalWrap.classList.remove('open')}
 function editItem(type,id){let key={job:'jobs',customer:'customers',expense:'expenses',inventory:'inventory'}[type];openModal(type,db[key].find(x=>x.id===id))}
@@ -386,7 +583,7 @@ modalForm.addEventListener('submit',async e=>{
  }else if(editing.type==='job'){
    if(!obj.jobNo)obj.jobNo='JOB-'+String(db.jobs.length+1).padStart(4,'0');
    const mat=db.materials.find(m=>m.name===obj.material),sink=db.sinks.find(s=>s.id===obj.sinkId);
-   obj.pricingSnapshot={materialId:mat?.id||null,materialName:mat?.name||obj.material||'',materialType:mat?.type||obj.materialType||'',materialCostPerSqFt:+(mat?.cost||0),materialSellPerSqFt:+(mat?.sell||0),sinkId:sink?.id||null,sinkName:sink?.name||'',sinkCostEach:+(sink?.cost||0),sinkSellEach:+(sink?.sell||0),rates:{...db.rates},lockedAt:new Date().toISOString()};
+   obj.pricingSnapshot={materialId:mat?.id||null,materialName:mat?.name||obj.material||'',materialType:mat?.type||obj.materialType||'',materialCostPerSqFt:+(mat?.cost||0),materialSellPerSqFt:+(mat?.sell||0),sinkId:sink?.id||null,sinkName:sink?.name||'',sinkCostEach:+(sink?sink.cost:db.rates.sinkCost||0),sinkSellEach:+(sink?sink.sell:db.rates.sinkCharge||0),rates:{...db.rates},lockedAt:new Date().toISOString()};
    try{const savedJob=await window.CMGJobs.save(obj,editing.id&&!String(editing.id).startsWith('temp-')?editing.id:null);const i=db.jobs.findIndex(x=>x.id===savedJob.id);if(i>=0)db.jobs[i]=savedJob;else db.jobs.unshift(savedJob);renderAll()}catch(error){alert('Job could not be saved. '+error.message);return}
  }else if(editing.id&&!String(editing.id).startsWith('temp-')){
    const i=db[key].findIndex(x=>x.id===editing.id);if(i>=0)db[key][i]={...db[key][i],...obj};
