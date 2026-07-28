@@ -7,28 +7,17 @@
     client=window.supabase.createClient(config.SUPABASE_URL,config.SUPABASE_KEY);
     return client;
   }
-  const screen=()=>document.getElementById('authScreen');
-  const errorBox=()=>document.getElementById('authError');
-  const loading=()=>document.getElementById('authLoading');
-  const submit=()=>document.getElementById('authSubmit');
-  function showError(message){const el=errorBox();el.textContent=message||'Unable to sign in.';el.classList.add('show');}
-  function clearError(){const el=errorBox();el.textContent='';el.classList.remove('show');}
-  function showLogin(){screen().classList.remove('hidden');loading().style.display='none';submit().disabled=false;}
-  function hideLogin(){screen().classList.add('hidden');}
-  async function requireSession(){const {data,error}=await getClient().auth.getSession();if(error)throw error;if(!data.session)throw new Error('Not signed in.');return data.session;}
-  async function signIn(email,password){
-    clearError();submit().disabled=true;loading().style.display='block';loading().textContent='Signing in…';
-    const {data,error}=await getClient().auth.signInWithPassword({email,password});
-    if(error){submit().disabled=false;loading().style.display='none';showError(error.message);return null;}
-    hideLogin();window.dispatchEvent(new CustomEvent('cmg-authenticated',{detail:data.session}));return data.session;
-  }
-  async function signOut(){await getClient().auth.signOut();location.reload();}
-  async function initialize(){
-    document.getElementById('authForm').addEventListener('submit',e=>{e.preventDefault();signIn(document.getElementById('authEmail').value.trim(),document.getElementById('authPassword').value);});
-    const {data,error}=await getClient().auth.getSession();
-    if(error){loading().style.display='none';showError(error.message);return;}
-    if(data.session){hideLogin();window.dispatchEvent(new CustomEvent('cmg-authenticated',{detail:data.session}));}else{showLogin();}
-    getClient().auth.onAuthStateChange((event,session)=>{if(event==='SIGNED_OUT'||!session)showLogin();});
-  }
-  window.CMGAuth={initialize,signIn,signOut,requireSession,getClient};
+  const n=v=>Number(v||0);
+  const materialFrom=r=>({id:r.id,name:r.name||'',type:r.type||'',supplier:r.supplier||'',cost:n(r.cost_per_sqft),sell:n(r.sell_per_sqft),active:r.active!==false});
+  const sinkFrom=r=>({id:r.id,name:r.name||'',supplier:r.supplier||'',cost:n(r.cost),sell:n(r.sell_price),active:r.active!==false});
+  async function listMaterials(){const {data,error}=await getClient().from('cmg_materials').select('*').order('type').order('name');if(error)throw error;return (data||[]).map(materialFrom)}
+  async function saveMaterial(m,id){const row={name:String(m.name||'').trim(),type:String(m.type||'').trim(),supplier:m.supplier||null,cost_per_sqft:n(m.cost),sell_per_sqft:n(m.sell),active:m.active!==false};if(!row.name||!row.type)throw new Error('Material name and stone type are required.');let q=id?getClient().from('cmg_materials').update(row).eq('id',id):getClient().from('cmg_materials').insert(row);const {data,error}=await q.select().single();if(error)throw error;return materialFrom(data)}
+  async function deleteMaterial(id){const {error}=await getClient().from('cmg_materials').delete().eq('id',id);if(error)throw error}
+  async function listSinks(){const {data,error}=await getClient().from('cmg_sinks').select('*').order('name');if(error)throw error;return (data||[]).map(sinkFrom)}
+  async function saveSink(s,id){const row={name:String(s.name||'').trim(),supplier:s.supplier||null,cost:n(s.cost),sell_price:n(s.sell),active:s.active!==false};if(!row.name)throw new Error('Sink name is required.');let q=id?getClient().from('cmg_sinks').update(row).eq('id',id):getClient().from('cmg_sinks').insert(row);const {data,error}=await q.select().single();if(error)throw error;return sinkFrom(data)}
+  async function deleteSink(id){const {error}=await getClient().from('cmg_sinks').delete().eq('id',id);if(error)throw error}
+  async function getRates(){const {data,error}=await getClient().from('cmg_rates').select('*').eq('id',1).maybeSingle();if(error)throw error;return data?{fabrication:n(data.fabrication_cost_per_sqft),install:n(data.install_cost_per_sqft),sinkCost:n(data.sink_cost),sinkCharge:n(data.sink_charge),sinkCutoutCost:n(data.sink_cutout_cost),sinkCutoutCharge:n(data.sink_cutout_charge),cooktopCutoutCost:n(data.cooktop_cutout_cost),cooktopCutoutCharge:n(data.cooktop_cutout_charge),tearoutCost:n(data.tearout_cost_per_sqft),tearoutCharge:n(data.tearout_charge_per_sqft)}:{fabrication:0,install:0,sinkCost:0,sinkCharge:0,sinkCutoutCost:0,sinkCutoutCharge:0,cooktopCutoutCost:0,cooktopCutoutCharge:0,tearoutCost:0,tearoutCharge:0}}
+  async function saveRates(r){const row={id:1,fabrication_cost_per_sqft:n(r.fabrication),install_cost_per_sqft:n(r.install),sink_cost:n(r.sinkCost),sink_charge:n(r.sinkCharge),sink_cutout_cost:n(r.sinkCutoutCost),sink_cutout_charge:n(r.sinkCutoutCharge),cooktop_cutout_cost:n(r.cooktopCutoutCost),cooktop_cutout_charge:n(r.cooktopCutoutCharge),tearout_cost_per_sqft:n(r.tearoutCost),tearout_charge_per_sqft:n(r.tearoutCharge),updated_at:new Date().toISOString()};const {error}=await getClient().from('cmg_rates').upsert(row);if(error)throw error}
+  async function initialize(localMaterials,localRates,localSinks){let [materials,sinks,rates]=await Promise.all([listMaterials(),listSinks(),getRates()]);if(!materials.length&&Array.isArray(localMaterials)&&localMaterials.length){for(const m of localMaterials)await saveMaterial(m);materials=await listMaterials()}if(!sinks.length&&Array.isArray(localSinks)&&localSinks.length){for(const s of localSinks)await saveSink(s);sinks=await listSinks()}if(!Object.values(rates).some(Boolean)&&localRates){rates={fabrication:n(localRates.fabrication),install:n(localRates.install),sinkCost:n(localRates.sinkCost),sinkCharge:n(localRates.sinkCharge),sinkCutoutCost:n(localRates.sinkCutoutCost),sinkCutoutCharge:n(localRates.sinkCutoutCharge),cooktopCutoutCost:n(localRates.cooktopCutoutCost),cooktopCutoutCharge:n(localRates.cooktopCutoutCharge),tearoutCost:n(localRates.tearoutCost),tearoutCharge:n(localRates.tearoutCharge)};await saveRates(rates)}return {materials,sinks,rates}}
+  window.CMGPricing={initialize,listMaterials,saveMaterial,deleteMaterial,listSinks,saveSink,deleteSink,getRates,saveRates};
 })();
